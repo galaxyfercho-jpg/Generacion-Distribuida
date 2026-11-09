@@ -39,6 +39,26 @@ st.markdown(
         padding-bottom: 3rem;
     }
 
+    [data-testid="stMainBlockContainer"] [data-testid="stMarkdownContainer"] p,
+    [data-testid="stMainBlockContainer"] [data-testid="stMarkdownContainer"] h1,
+    [data-testid="stMainBlockContainer"] [data-testid="stMarkdownContainer"] h2,
+    [data-testid="stMainBlockContainer"] [data-testid="stMarkdownContainer"] h3,
+    [data-testid="stMainBlockContainer"] [data-testid="stWidgetLabel"],
+    [data-testid="stMainBlockContainer"] [data-testid="stWidgetLabel"] *,
+    [data-testid="stMainBlockContainer"] label,
+    [data-testid="stMainBlockContainer"] [data-testid="stCaptionContainer"] {
+        color: var(--gd-ink) !important;
+    }
+
+    [data-testid="stMainBlockContainer"] [data-baseweb="select"] > div {
+        background-color: #ffffff;
+        border-color: #cbd5dc;
+    }
+
+    [data-testid="stMainBlockContainer"] [data-baseweb="select"] * {
+        color: var(--gd-ink);
+    }
+
     [data-testid="stSidebar"] {
         background: linear-gradient(180deg, #154360 0%, #1d5b79 100%);
     }
