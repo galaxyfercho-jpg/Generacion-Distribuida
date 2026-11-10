@@ -22,7 +22,7 @@ st.markdown(
         --gd-blue: #2874a6;
         --gd-green: #63a63a;
         --gd-ink: #263746;
-        --gd-muted: #687b89;
+        --gd-muted: #52616b;
         --gd-surface: #ffffff;
         --gd-canvas: #f3f6f8;
     }
@@ -52,6 +52,17 @@ st.markdown(
     [data-testid="stMainBlockContainer"] [data-testid="stWidgetLabel"] *,
     [data-testid="stMainBlockContainer"] label,
     [data-testid="stMainBlockContainer"] [data-testid="stCaptionContainer"] {
+        color: var(--gd-ink) !important;
+    }
+
+    [data-testid="stMainBlockContainer"] [data-testid="stAlert"] {
+        background-color: #ffffff !important;
+        border: 1px solid #cbd5dc !important;
+        border-radius: 8px;
+        color: var(--gd-ink) !important;
+    }
+
+    [data-testid="stMainBlockContainer"] [data-testid="stAlert"] * {
         color: var(--gd-ink) !important;
     }
 
@@ -644,7 +655,10 @@ def mostrar_administracion_usuarios(perfil: dict) -> None:
     with st.form("web_user_create_form", clear_on_submit=True):
         username = st.text_input(
             "Nombre de usuario",
-            help="3–64 caracteres: minúsculas, números, punto, guion o guion bajo.",
+            help=(
+                "2–64 caracteres. Se permiten letras con tilde, números, espacios, "
+                "punto, guion, guion bajo, @ y +. Se guarda en minúsculas."
+            ),
         )
         display_name = st.text_input("Nombre de la persona")
         role = st.selectbox(
@@ -688,39 +702,54 @@ def mostrar_administracion_usuarios(perfil: dict) -> None:
             )
             for usuario in usuarios
         }
-        with st.form("web_user_password_reset_form"):
-            usuario_password = st.selectbox(
-                "Cuenta para restablecer",
-                list(opciones),
-                format_func=lambda user_id: opciones[user_id],
+        access_token_user_id = st.session_state.get("user_profile", {}).get(
+            "auth_user_id"
+        )
+        opciones_restablecimiento = {
+            user_id: label
+            for user_id, label in opciones.items()
+            if user_id != access_token_user_id
+        }
+        if opciones_restablecimiento:
+            with st.form("web_user_password_reset_form"):
+                usuario_password = st.selectbox(
+                    "Cuenta para restablecer",
+                    list(opciones_restablecimiento),
+                    format_func=lambda user_id: opciones_restablecimiento[user_id],
+                )
+                restablecer = st.form_submit_button(
+                    "Generar contraseña nueva",
+                    icon=":material/key:",
+                )
+            if restablecer:
+                try:
+                    password_temporal = administrador.restablecer_password(
+                        access_token,
+                        usuario_password,
+                    )
+                except WebUserAdminError as error:
+                    st.error(str(error), title="No se pudo restablecer la contraseña")
+                else:
+                    usuario_seleccionado = next(
+                        usuario["username"]
+                        for usuario in usuarios
+                        if usuario["auth_user_id"] == usuario_password
+                    )
+                    st.session_state["generated_web_user_credential"] = {
+                        "username": usuario_seleccionado,
+                        "password": password_temporal,
+                        "action": "Contraseña restablecida",
+                    }
+                    st.success(
+                        "Se generó una contraseña nueva. La contraseña anterior dejó "
+                        "de funcionar."
+                    )
+        else:
+            st.info(
+                "No puedes restablecer tu propia contraseña desde esta sesión. "
+                "Para recuperarla, usa scripts/reset_web_admin_password.py en una "
+                "copia local autorizada del proyecto."
             )
-            restablecer = st.form_submit_button(
-                "Generar contraseña nueva",
-                icon=":material/key:",
-            )
-        if restablecer:
-            try:
-                password_temporal = administrador.restablecer_password(
-                    access_token,
-                    usuario_password,
-                )
-            except WebUserAdminError as error:
-                st.error(str(error), title="No se pudo restablecer la contraseña")
-            else:
-                usuario_seleccionado = next(
-                    usuario["username"]
-                    for usuario in usuarios
-                    if usuario["auth_user_id"] == usuario_password
-                )
-                st.session_state["generated_web_user_credential"] = {
-                    "username": usuario_seleccionado,
-                    "password": password_temporal,
-                    "action": "Contraseña restablecida",
-                }
-                st.success(
-                    "Se generó una contraseña nueva. La contraseña anterior dejó "
-                    "de funcionar."
-                )
 
         with st.form("web_user_status_form"):
             usuario_estado = st.selectbox(

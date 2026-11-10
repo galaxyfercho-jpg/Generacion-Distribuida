@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import secrets
+import unicodedata
 from typing import Any, Callable
 from urllib.parse import quote
 
@@ -10,7 +11,7 @@ import requests
 
 ADMIN_ROLES = frozenset({"Administrador", "Consulta"})
 DISABLE_BAN_DURATION = "876000h"
-USERNAME_PATTERN = re.compile(r"^[a-z0-9._-]{3,64}$")
+USERNAME_PATTERN = re.compile(r"^(?=.*\w)[\w .@+-]{2,64}$", re.UNICODE)
 
 
 class WebUserAdminError(RuntimeError):
@@ -154,12 +155,13 @@ class WebUserAdmin:
         role: str,
     ) -> tuple[dict[str, Any], str]:
         self._require_administrator(access_token)
-        username = username.strip().lower()
+        username = unicodedata.normalize("NFKC", username.strip()).lower()
         display_name = display_name.strip()
         if not USERNAME_PATTERN.fullmatch(username):
             raise ValueError(
-                "El usuario debe tener entre 3 y 64 caracteres: letras minúsculas, "
-                "números, punto, guion o guion bajo."
+                "El usuario debe tener entre 2 y 64 caracteres. Se permiten letras "
+                "(también con tilde), números, espacios, punto, guion, guion bajo, "
+                "@ y +."
             )
         if not display_name:
             raise ValueError("Escribe el nombre de la persona.")
@@ -249,7 +251,12 @@ class WebUserAdmin:
         access_token: str,
         auth_user_id: str,
     ) -> str:
-        self._require_administrator(access_token)
+        actor_id = self._require_administrator(access_token)
+        if auth_user_id == actor_id:
+            raise WebUserAdminError(
+                "No puedes restablecer tu propia contraseña desde esta sesión. "
+                "Usa la utilidad local de recuperación o pide ayuda a otro administrador."
+            )
         self._obtener_usuario(auth_user_id)
         password = secrets.token_urlsafe(24)
         self._request(
@@ -258,6 +265,71 @@ class WebUserAdmin:
             payload={"password": password},
         )
         return password
+
+    def restablecer_password_administrador_por_usuario(
+        self,
+        username: str,
+        new_password: str,
+    ) -> tuple[str, str]:
+        username = username.strip()
+        if not username or len(username) > 64:
+            raise ValueError("Escribe el nombre de usuario existente (máximo 64 caracteres).")
+        if len(new_password) < 12:
+            raise ValueError("La contraseña nueva debe tener al menos 12 caracteres.")
+
+        perfiles = self._request(
+            "GET",
+            "/rest/v1/web_profiles",
+            params={
+                "select": "auth_user_id,username,role,enabled",
+                "username": f"eq.{username}",
+                "limit": "1",
+            },
+        )
+        if not perfiles:
+            raise WebUserAdminError("No se encontró el perfil de ese usuario.")
+        perfil = perfiles[0]
+        if perfil.get("role") != "Administrador" or not perfil.get("enabled"):
+            raise WebUserAdminError(
+                "La cuenta no es un Administrador habilitado; no se restableció."
+            )
+
+        email = self._correo_interno(str(perfil["username"]))
+        page = 1
+        auth_user_id = None
+        while True:
+            resultado = self._request(
+                "GET",
+                "/auth/v1/admin/users",
+                params={"page": str(page), "per_page": "1000"},
+            )
+            usuarios = resultado.get("users", []) if isinstance(resultado, dict) else []
+            auth_user_id = next(
+                (
+                    usuario.get("id")
+                    for usuario in usuarios
+                    if isinstance(usuario.get("email"), str)
+                    and usuario["email"].casefold() == email.casefold()
+                ),
+                None,
+            )
+            if auth_user_id:
+                break
+            if len(usuarios) < 1000:
+                break
+            page += 1
+
+        if not auth_user_id or auth_user_id != perfil.get("auth_user_id"):
+            raise WebUserAdminError(
+                "No se pudo asociar de forma segura el perfil con su cuenta de Auth."
+            )
+
+        self._request(
+            "PUT",
+            f"/auth/v1/admin/users/{quote(str(auth_user_id), safe='')}",
+            payload={"password": new_password},
+        )
+        return username, new_password
 
     def cambiar_habilitacion(
         self,
