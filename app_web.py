@@ -55,11 +55,26 @@ st.markdown(
         color: var(--gd-ink) !important;
     }
 
-    [data-testid="stMainBlockContainer"] [data-testid="stAlert"] {
-        background-color: #ffffff !important;
-        border: 1px solid #cbd5dc !important;
+    [data-testid="stMainBlockContainer"] [data-testid="stAlertContainer"] {
+        background-color: #edf4fa !important;
+        border: 1px solid #a9c5da !important;
         border-radius: 8px;
         color: var(--gd-ink) !important;
+    }
+
+    [data-testid="stMainBlockContainer"] [data-testid="stAlertContainer"]:has([data-testid="stAlertContentWarning"]) {
+        background-color: #fff5d6 !important;
+        border-color: #d3b353 !important;
+    }
+
+    [data-testid="stMainBlockContainer"] [data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]) {
+        background-color: #ffeded !important;
+        border-color: #d99b9b !important;
+    }
+
+    [data-testid="stMainBlockContainer"] [data-testid="stAlertContainer"]:has([data-testid="stAlertContentSuccess"]) {
+        background-color: #e8f5e9 !important;
+        border-color: #9dc9a4 !important;
     }
 
     [data-testid="stMainBlockContainer"] [data-testid="stAlert"] * {
@@ -81,13 +96,36 @@ st.markdown(
         color: var(--gd-ink) !important;
     }
 
-    [data-testid="stMainBlockContainer"] [data-baseweb="select"] > div {
-        background-color: #ffffff;
-        border-color: #cbd5dc;
+    [data-testid="stMainBlockContainer"] [data-baseweb="select"] > div,
+    [data-testid="stMainBlockContainer"] [data-testid="stSelectbox"] [role="group"],
+    [data-testid="stMainBlockContainer"] [data-testid="stTextInputRootElement"] {
+        background-color: #ffffff !important;
+        border-color: #cbd5dc !important;
+        color: var(--gd-ink) !important;
     }
 
-    [data-testid="stMainBlockContainer"] [data-baseweb="select"] * {
-        color: var(--gd-ink);
+    [data-testid="stMainBlockContainer"] [data-baseweb="select"] *,
+    [data-testid="stMainBlockContainer"] [data-testid="stSelectbox"] input,
+    [data-testid="stMainBlockContainer"] [data-testid="stSelectbox"] [role="group"] button,
+    [data-testid="stMainBlockContainer"] [data-testid="stTextInputRootElement"] input,
+    [data-testid="stMainBlockContainer"] [data-testid="stTextInputRootElement"] button {
+        color: var(--gd-ink) !important;
+    }
+
+    [role="listbox"] {
+        background-color: #ffffff !important;
+        color: var(--gd-ink) !important;
+    }
+
+    [role="option"] {
+        background-color: #ffffff !important;
+        color: var(--gd-ink) !important;
+    }
+
+    [role="option"]:hover,
+    [role="option"][data-focused="true"],
+    [role="option"][aria-selected="true"] {
+        background-color: #e5eff6 !important;
     }
 
     [data-testid="stSidebar"] {
@@ -115,6 +153,16 @@ st.markdown(
         padding: 0.25rem 0.4rem;
     }
 
+    [data-testid="stSidebar"] [data-testid="stBaseButton-secondary"],
+    [data-testid="stSidebar"] [data-testid="stBaseButton-secondary"] * {
+        background-color: #ffffff;
+        color: var(--gd-ink) !important;
+    }
+
+    [data-testid="stSidebar"] [data-testid="stBaseButton-headerNoPadding"] {
+        color: #ffffff !important;
+    }
+
     [data-testid="stMetric"] {
         background: var(--gd-surface);
         border: 1px solid #dfe7ec;
@@ -138,23 +186,34 @@ st.markdown(
         box-shadow: 0 2px 8px rgba(21, 67, 96, 0.035);
     }
 
-    [data-testid="stBaseButton-primary"] {
-        background: var(--gd-blue);
-        border-color: var(--gd-blue);
+    [data-testid="stMainBlockContainer"] :is([data-testid="stBaseButton-primary"], [data-testid="stBaseButton-primaryFormSubmit"]) {
+        background: var(--gd-blue) !important;
+        border-color: var(--gd-blue) !important;
     }
 
-    [data-testid="stMainBlockContainer"] [data-testid="stBaseButton-secondary"] {
+    [data-testid="stMainBlockContainer"] :is([data-testid="stBaseButton-secondary"], [data-testid="stBaseButton-secondaryFormSubmit"]) {
         background: #ffffff !important;
         border-color: #cbd5dc !important;
         color: var(--gd-ink) !important;
     }
 
-    [data-testid="stMainBlockContainer"] [data-testid="stBaseButton-secondary"] * {
+    [data-testid="stMainBlockContainer"] :is([data-testid="stBaseButton-secondary"], [data-testid="stBaseButton-secondaryFormSubmit"]) * {
         color: var(--gd-ink) !important;
     }
 
-    [data-testid="stMainBlockContainer"] [data-testid="stBaseButton-primary"] * {
+    [data-testid="stMainBlockContainer"] :is([data-testid="stBaseButton-primary"], [data-testid="stBaseButton-primaryFormSubmit"]) *,
+    [data-testid="stMainBlockContainer"] :is([data-testid="stBaseButton-primary"], [data-testid="stBaseButton-primaryFormSubmit"]) [data-testid="stMarkdownContainer"] p {
         color: #ffffff !important;
+    }
+
+    [data-testid="stMainBlockContainer"] :is([data-testid="stBaseButton-secondary"], [data-testid="stBaseButton-secondaryFormSubmit"], [data-testid="stBaseButton-primary"], [data-testid="stBaseButton-primaryFormSubmit"]):disabled {
+        background: #e5e9ec !important;
+        border-color: #b7c0c6 !important;
+    }
+
+    [data-testid="stMainBlockContainer"] :is([data-testid="stBaseButton-secondary"], [data-testid="stBaseButton-secondaryFormSubmit"], [data-testid="stBaseButton-primary"], [data-testid="stBaseButton-primaryFormSubmit"]):disabled *,
+    [data-testid="stMainBlockContainer"] :is([data-testid="stBaseButton-primary"], [data-testid="stBaseButton-primaryFormSubmit"]):disabled [data-testid="stMarkdownContainer"] p {
+        color: #52616b !important;
     }
 
     @media (max-width: 700px) {
@@ -320,7 +379,7 @@ def mostrar_encabezado(titulo: str, descripcion: str, perfil: dict | None = None
         nombre.markdown(
             f"<div style='color:#154360;font-size:1.75rem;font-weight:750;"
             f"line-height:1.15'>{titulo}</div>"
-            f"<div style='color:#687b89;margin-top:.35rem'>{descripcion}</div>",
+            f"<div style='color:#52616b;margin-top:.35rem'>{descripcion}</div>",
             unsafe_allow_html=True,
         )
         if perfil:

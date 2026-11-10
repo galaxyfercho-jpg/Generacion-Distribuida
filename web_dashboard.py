@@ -135,5 +135,12 @@ def crear_grafico_avance(avance: pd.DataFrame) -> alt.LayerChart:
         )
     )
     return (barras + etiquetas).properties(
+        background="#ffffff",
         height=max(220, min(620, len(datos) * 44))
+    ).configure_axis(
+        labelColor="#263746",
+        titleColor="#263746",
+        domainColor="#52616b",
+        tickColor="#52616b",
+        gridColor="#dfe7ec",
     )
