@@ -6,6 +6,8 @@ import pandas as pd
 import requests
 import streamlit as st
 from web_dashboard import calcular_avance_por_cluster, crear_grafico_avance
+from requirement_rules import RADICACION_NO_APLICA_CATEGORIAS
+from web_user_admin import WebUserAdmin, WebUserAdminError
 
 
 st.set_page_config(page_title="Portafolio GD", page_icon=":material/solar_power:", layout="wide")
@@ -43,10 +45,28 @@ st.markdown(
     [data-testid="stMainBlockContainer"] [data-testid="stMarkdownContainer"] h1,
     [data-testid="stMainBlockContainer"] [data-testid="stMarkdownContainer"] h2,
     [data-testid="stMainBlockContainer"] [data-testid="stMarkdownContainer"] h3,
+    [data-testid="stMainBlockContainer"] [data-testid="stMarkdownContainer"] h4,
+    [data-testid="stMainBlockContainer"] [data-testid="stMarkdownContainer"] h5,
+    [data-testid="stMainBlockContainer"] [data-testid="stMarkdownContainer"] h6,
     [data-testid="stMainBlockContainer"] [data-testid="stWidgetLabel"],
     [data-testid="stMainBlockContainer"] [data-testid="stWidgetLabel"] *,
     [data-testid="stMainBlockContainer"] label,
     [data-testid="stMainBlockContainer"] [data-testid="stCaptionContainer"] {
+        color: var(--gd-ink) !important;
+    }
+
+    [data-testid="stMainBlockContainer"] [data-testid="stExpander"] details > summary {
+        background-color: #ffffff !important;
+        color: var(--gd-ink) !important;
+    }
+
+    [data-testid="stMainBlockContainer"] [data-testid="stExpander"] details > summary *,
+    [data-testid="stMainBlockContainer"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] h1,
+    [data-testid="stMainBlockContainer"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] h2,
+    [data-testid="stMainBlockContainer"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] h3,
+    [data-testid="stMainBlockContainer"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] h4,
+    [data-testid="stMainBlockContainer"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] h5,
+    [data-testid="stMainBlockContainer"] [data-testid="stExpander"] [data-testid="stMarkdownContainer"] h6 {
         color: var(--gd-ink) !important;
     }
 
@@ -112,6 +132,20 @@ st.markdown(
         border-color: var(--gd-blue);
     }
 
+    [data-testid="stMainBlockContainer"] [data-testid="stBaseButton-secondary"] {
+        background: #ffffff !important;
+        border-color: #cbd5dc !important;
+        color: var(--gd-ink) !important;
+    }
+
+    [data-testid="stMainBlockContainer"] [data-testid="stBaseButton-secondary"] * {
+        color: var(--gd-ink) !important;
+    }
+
+    [data-testid="stMainBlockContainer"] [data-testid="stBaseButton-primary"] * {
+        color: #ffffff !important;
+    }
+
     @media (max-width: 700px) {
         [data-testid="stMainBlockContainer"] {
             padding: 1rem 1rem 2rem;
@@ -125,6 +159,9 @@ st.markdown(
 try:
     SUPABASE_URL = st.secrets["supabase"]["url"].rstrip("/")
     SUPABASE_ANON_KEY = st.secrets["supabase"]["anon_key"]
+    SUPABASE_SERVICE_ROLE_KEY = str(
+        st.secrets["supabase"].get("service_role_key", "")
+    ).strip()
 except Exception:
     st.title("Gestor de proyectos GD")
     st.error(
@@ -185,7 +222,13 @@ def solicitar_supabase(method, endpoint, token=None, params=None, payload=None):
 
 
 def borrar_sesion():
-    for key in ("access_token", "refresh_token", "expires_at", "user_profile"):
+    for key in (
+        "access_token",
+        "refresh_token",
+        "expires_at",
+        "user_profile",
+        "generated_web_user_credential",
+    ):
         st.session_state.pop(key, None)
 
 
@@ -516,6 +559,12 @@ def mostrar_detalle(proyectos: pd.DataFrame, token: str):
     if requisitos.empty:
         st.info("Este proyecto no tiene requisitos registrados.")
     else:
+        sin_radicacion = requisitos["categoria"].isin(
+            RADICACION_NO_APLICA_CATEGORIAS
+        )
+        requisitos.loc[
+            sin_radicacion, ["fecha_radicacion", "fecha_limite"]
+        ] = ""
         requisitos = requisitos.rename(
             columns={
                 "categoria": "Módulo",
@@ -553,6 +602,177 @@ def mostrar_repositorio_documental_pendiente():
         )
 
 
+def mostrar_administracion_usuarios(perfil: dict) -> None:
+    st.caption(
+        "Crea cuentas de acceso al portal, deshabilítalas o genera una contraseña nueva."
+    )
+    if perfil.get("role") != "Administrador":
+        st.error("Esta sección está disponible solo para administradores.")
+        return
+    try:
+        administrador = WebUserAdmin(
+            SUPABASE_URL,
+            SUPABASE_ANON_KEY,
+            SUPABASE_SERVICE_ROLE_KEY,
+        )
+        access_token = st.session_state.get("access_token", "")
+        usuarios = administrador.listar_usuarios(access_token)
+    except WebUserAdminError as error:
+        st.error(str(error), title="No se pudo abrir la administración")
+        return
+
+    tabla_usuarios = pd.DataFrame(
+        [
+            {
+                "Usuario": usuario["username"],
+                "Nombre": usuario["display_name"],
+                "Rol": usuario["role"],
+                "Estado": "Habilitado" if usuario["enabled"] else "Deshabilitado",
+            }
+            for usuario in usuarios
+        ],
+        columns=["Usuario", "Nombre", "Rol", "Estado"],
+    )
+    st.dataframe(
+        tabla_usuarios,
+        hide_index=True,
+        alt="Usuarios web, roles y estado de acceso",
+        width="stretch",
+    )
+
+    st.subheader("Crear usuario")
+    with st.form("web_user_create_form", clear_on_submit=True):
+        username = st.text_input(
+            "Nombre de usuario",
+            help="3–64 caracteres: minúsculas, números, punto, guion o guion bajo.",
+        )
+        display_name = st.text_input("Nombre de la persona")
+        role = st.selectbox(
+            "Permisos",
+            ["Consulta", "Administrador"],
+            format_func=lambda value: (
+                "Consulta (solo lectura)"
+                if value == "Consulta"
+                else "Administrador (puede publicar desde escritorio)"
+            ),
+        )
+        crear = st.form_submit_button(
+            "Crear cuenta",
+            type="primary",
+            icon=":material/person_add:",
+        )
+    if crear:
+        try:
+            perfil_creado, password_temporal = administrador.crear_usuario(
+                access_token,
+                username,
+                display_name,
+                role,
+            )
+        except (WebUserAdminError, ValueError) as error:
+            st.error(str(error), title="No se pudo crear el usuario")
+        else:
+            st.session_state["generated_web_user_credential"] = {
+                "username": perfil_creado["username"],
+                "password": password_temporal,
+                "action": "Cuenta creada",
+            }
+            st.rerun()
+
+    st.subheader("Gestionar cuenta")
+    if usuarios:
+        opciones = {
+            usuario["auth_user_id"]: (
+                f"{usuario['username']} · {usuario['role']} · "
+                f"{'habilitado' if usuario['enabled'] else 'deshabilitado'}"
+            )
+            for usuario in usuarios
+        }
+        with st.form("web_user_password_reset_form"):
+            usuario_password = st.selectbox(
+                "Cuenta para restablecer",
+                list(opciones),
+                format_func=lambda user_id: opciones[user_id],
+            )
+            restablecer = st.form_submit_button(
+                "Generar contraseña nueva",
+                icon=":material/key:",
+            )
+        if restablecer:
+            try:
+                password_temporal = administrador.restablecer_password(
+                    access_token,
+                    usuario_password,
+                )
+            except WebUserAdminError as error:
+                st.error(str(error), title="No se pudo restablecer la contraseña")
+            else:
+                usuario_seleccionado = next(
+                    usuario["username"]
+                    for usuario in usuarios
+                    if usuario["auth_user_id"] == usuario_password
+                )
+                st.session_state["generated_web_user_credential"] = {
+                    "username": usuario_seleccionado,
+                    "password": password_temporal,
+                    "action": "Contraseña restablecida",
+                }
+                st.success(
+                    "Se generó una contraseña nueva. La contraseña anterior dejó "
+                    "de funcionar."
+                )
+
+        with st.form("web_user_status_form"):
+            usuario_estado = st.selectbox(
+                "Cuenta para cambiar de estado",
+                list(opciones),
+                format_func=lambda user_id: opciones[user_id],
+            )
+            confirmar = st.checkbox("Confirmo el cambio de acceso")
+            cambiar_estado = st.form_submit_button(
+                "Habilitar o deshabilitar",
+                icon=":material/manage_accounts:",
+            )
+        if cambiar_estado:
+            usuario_actual = next(
+                usuario
+                for usuario in usuarios
+                if usuario["auth_user_id"] == usuario_estado
+            )
+            nuevo_estado = not bool(usuario_actual["enabled"])
+            if not confirmar:
+                st.warning("Marca la confirmación antes de cambiar el acceso.")
+            else:
+                try:
+                    administrador.cambiar_habilitacion(
+                        access_token,
+                        usuario_estado,
+                        nuevo_estado,
+                    )
+                except WebUserAdminError as error:
+                    st.error(str(error), title="No se pudo cambiar el acceso")
+                else:
+                    st.success(
+                        f"Cuenta {usuario_actual['username']} "
+                        f"{'habilitada' if nuevo_estado else 'deshabilitada'}."
+                    )
+                    st.rerun()
+    else:
+        st.info("Aún no hay cuentas web para administrar.")
+
+    credencial = st.session_state.get("generated_web_user_credential")
+    if credencial:
+        st.warning(
+            f"{credencial['action']} para **{credencial['username']}**. "
+            "Esta contraseña se muestra en esta sesión; compártela por un canal "
+            "privado y luego ocúltala."
+        )
+        st.code(credencial["password"], language="text")
+        if st.button("Ocultar contraseña", icon=":material/visibility_off:"):
+            st.session_state.pop("generated_web_user_credential", None)
+            st.rerun()
+
+
 @st.fragment(run_every=PORTAFOLIO_REFRESH_INTERVAL)
 def mostrar_portafolio_actualizado(pagina: str, perfil: dict) -> None:
     token_actual = obtener_token_vigente()
@@ -583,6 +803,10 @@ def mostrar_portafolio_actualizado(pagina: str, perfil: dict) -> None:
         "Consolidado": ("Consolidado de proyectos", "Proyectos agrupados por clúster"),
         "Detalle de proyecto": ("Detalle de proyecto", "Información y requisitos"),
         "Gestor de soportes": ("Gestor de soportes", "Repositorio documental"),
+        "Administración de usuarios": (
+            "Administración de usuarios",
+            "Cuentas, permisos y contraseñas",
+        ),
     }
     titulo, descripcion = titulos.get(
         pagina,
@@ -618,6 +842,8 @@ def mostrar_portafolio_actualizado(pagina: str, perfil: dict) -> None:
         mostrar_dashboard(proyectos, requisitos_resumen)
     elif pagina == "Detalle de proyecto":
         mostrar_detalle(proyectos, token_actual)
+    elif pagina == "Administración de usuarios":
+        mostrar_administracion_usuarios(perfil)
     else:
         mostrar_repositorio_documental_pendiente()
 
@@ -639,9 +865,12 @@ with st.sidebar:
         st.image(str(LOGO_PATH), width=180)
     st.markdown("### Portafolio GD")
     st.caption("Generación distribuida")
+    paginas = ["Resumen", "Consolidado", "Detalle de proyecto", "Gestor de soportes"]
+    if perfil.get("role") == "Administrador":
+        paginas.append("Administración de usuarios")
     pagina = st.radio(
         "Sección",
-        ["Resumen", "Consolidado", "Detalle de proyecto", "Gestor de soportes"],
+        paginas,
         key="portal_page_v2",
         label_visibility="collapsed",
     )
