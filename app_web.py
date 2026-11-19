@@ -7,6 +7,7 @@ import requests
 import streamlit as st
 from web_dashboard import calcular_avance_por_cluster, crear_grafico_avance
 from requirement_rules import RADICACION_NO_APLICA_CATEGORIAS
+import subsanacion
 from web_user_admin import WebUserAdmin, WebUserAdminError
 
 
@@ -535,11 +536,38 @@ def mostrar_consolidado(proyectos: pd.DataFrame, requisitos: pd.DataFrame):
                         st.rerun()
 
 
+def mostrar_alerta_subsanaciones(proyectos: pd.DataFrame, requisitos: pd.DataFrame):
+    if requisitos is None or requisitos.empty or "fecha_observaciones" not in requisitos:
+        return
+    activos = requisitos[
+        (requisitos["estado"] == subsanacion.ESTADO_SUBSANACION)
+        & requisitos["descripcion"].map(subsanacion.es_requisito_subsanacion)
+    ]
+    nombres = dict(zip(proyectos["id"], proyectos["nombre"]))
+    lineas, hay_vencida = [], False
+    for fila in activos.itertuples():
+        info = subsanacion.estado_subsanacion(fila.fecha_observaciones)
+        hay_vencida = hay_vencida or bool(info and info[2])
+        nombre = nombres.get(fila.proyecto_id, f"Proyecto {fila.proyecto_id}")
+        lineas.append(
+            (info[1] if info else -10**6, f"- **{nombre}**: {subsanacion.texto_alerta(fila.fecha_observaciones)}")
+        )
+    if not lineas:
+        return
+    lineas.sort(key=lambda item: item[0])
+    texto = (
+        f"**ALERTA: {len(lineas)} estudio(s) de conexión (2.1) EN SUBSANACIONES** "
+        "(plazo ENERCA: 10 días hábiles)\n\n" + "\n".join(linea for _, linea in lineas)
+    )
+    (st.error if hay_vencida else st.warning)(texto)
+
+
 def mostrar_dashboard(proyectos: pd.DataFrame, requisitos: pd.DataFrame):
     st.caption("Indicadores clave y avance de requisitos aplicables en cada agrupación.")
     if proyectos.empty:
         st.info("No hay proyectos disponibles para calcular indicadores.")
         return
+    mostrar_alerta_subsanaciones(proyectos, requisitos)
 
     datos = proyectos.copy()
     datos["capacidad_kw"] = pd.to_numeric(datos["capacidad_kw"], errors="coerce").fillna(0)
@@ -622,7 +650,7 @@ def mostrar_detalle(proyectos: pd.DataFrame, token: str):
     requisitos = cargar_tabla(
         "requisitos",
         token,
-        "categoria,descripcion,entidad,estado,fecha_radicacion,fecha_limite,fecha_final,observaciones",
+        "categoria,descripcion,entidad,estado,fecha_radicacion,fecha_limite,fecha_final,fecha_observaciones,observaciones",
         {"proyecto_id": f"eq.{proyecto_id}", "order": "categoria.asc,descripcion.asc"},
     )
     st.subheader("Requisitos")
@@ -644,6 +672,7 @@ def mostrar_detalle(proyectos: pd.DataFrame, token: str):
                 "fecha_radicacion": "Radicación",
                 "fecha_limite": "Fecha límite",
                 "fecha_final": "Cierre",
+                "fecha_observaciones": "Obs. ENERCA recibidas",
                 "observaciones": "Observaciones",
             }
         )
@@ -908,7 +937,7 @@ def mostrar_portafolio_actualizado(pagina: str, perfil: dict) -> None:
             requisitos_resumen = cargar_tabla(
                 "requisitos",
                 token_actual,
-                "proyecto_id,categoria,estado",
+                "proyecto_id,categoria,estado,descripcion,fecha_observaciones",
             )
         except PortalError as error:
             requisitos_resumen = st.session_state.get(
