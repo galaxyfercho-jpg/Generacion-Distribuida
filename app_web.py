@@ -363,11 +363,23 @@ def obtener_token_vigente():
 
 
 def cargar_tabla(tabla: str, token: str, columnas: str, params=None) -> pd.DataFrame:
-    filtros = {"select": columnas, "limit": "5000"}
+    filtros = {"select": columnas}
     if params:
         filtros.update(params)
-    datos = solicitar_supabase("GET", f"/rest/v1/{tabla}", token=token, params=filtros)
-    return pd.DataFrame(datos or [])
+    filtros.setdefault("order", "id.asc")
+    pagina_tam, desplazamiento, registros = 1000, 0, []
+    while True:
+        pagina = solicitar_supabase(
+            "GET",
+            f"/rest/v1/{tabla}",
+            token=token,
+            params={**filtros, "limit": str(pagina_tam), "offset": str(desplazamiento)},
+        ) or []
+        registros.extend(pagina)
+        if len(pagina) < pagina_tam:
+            break
+        desplazamiento += pagina_tam
+    return pd.DataFrame(registros)
 
 
 def mostrar_encabezado(titulo: str, descripcion: str, perfil: dict | None = None):
