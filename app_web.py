@@ -6,6 +6,8 @@ from urllib.parse import quote
 
 import pandas as pd
 import requests
+import boto3
+from botocore.config import Config
 import streamlit as st
 from web_dashboard import calcular_avance_por_cluster, crear_grafico_avance
 from requirement_rules import RADICACION_NO_APLICA_CATEGORIAS
@@ -249,7 +251,29 @@ STORAGE_URL = str(_storage_cfg.get("url", SUPABASE_URL)).rstrip("/")
 STORAGE_KEY = str(_storage_cfg.get("key", SUPABASE_SERVICE_ROLE_KEY)).strip()
 STORAGE_BUCKET = str(_storage_cfg.get("bucket", "soportes-gd")).strip()
 STORAGE_PREFIX = "sb://"
+
+_r2_cfg = st.secrets.get("r2_storage", {})
+R2_ACCOUNT_ID = str(_r2_cfg.get("account_id", "")).strip()
+R2_ACCESS_KEY_ID = str(_r2_cfg.get("access_key_id", "")).strip()
+R2_SECRET_ACCESS_KEY = str(_r2_cfg.get("secret_access_key", "")).strip()
+R2_BUCKET = str(_r2_cfg.get("bucket", "soportes-gd")).strip()
+R2_PREFIX = "r2://"
+
 SIGNED_URL_TTL_SECONDS = 300
+
+
+@st.cache_resource
+def obtener_cliente_r2():
+    if not (R2_ACCOUNT_ID and R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY and R2_BUCKET):
+        return None
+    return boto3.client(
+        "s3",
+        endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+        aws_access_key_id=R2_ACCESS_KEY_ID,
+        aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+        region_name="auto",
+        config=Config(signature_version="s3v4"),
+    )
 
 
 class PortalError(RuntimeError):
@@ -302,32 +326,65 @@ def solicitar_supabase(method, endpoint, token=None, params=None, payload=None):
 
 
 def extraer_ruta_objeto_storage(ruta_bd: str) -> str | None:
-    """Devuelve la ruta interna del objeto en el bucket si la referencia usa sb://."""
+    """Devuelve la referencia en nube si usa r2:// o sb://."""
     if not ruta_bd:
         return None
     texto = str(ruta_bd).strip()
-    if not texto.startswith(STORAGE_PREFIX):
-        return None
-    objeto = texto[len(STORAGE_PREFIX):].lstrip("/")
-    if objeto.startswith(f"{STORAGE_BUCKET}/"):
-        objeto = objeto[len(STORAGE_BUCKET) + 1:]
-    return objeto or None
+    if texto.startswith(R2_PREFIX):
+        objeto = texto[len(R2_PREFIX):].lstrip("/")
+        return f"{R2_PREFIX}{objeto}" if objeto else None
+    if texto.startswith(STORAGE_PREFIX):
+        objeto = texto[len(STORAGE_PREFIX):].lstrip("/")
+        if objeto.startswith(f"{STORAGE_BUCKET}/"):
+            objeto = objeto[len(STORAGE_BUCKET) + 1:]
+        return f"{STORAGE_PREFIX}{objeto}" if objeto else None
+    return None
 
 
 def obtener_nombre_archivo(ruta_bd: str) -> str:
     texto = str(ruta_bd or "").strip()
-    if texto.startswith(STORAGE_PREFIX):
+    if texto.startswith((R2_PREFIX, STORAGE_PREFIX)):
         return texto.rstrip("/").split("/")[-1]
     return os.path.basename(texto.replace("\\", "/")) or texto
 
 
 def generar_enlaces_privados_storage(ruta_objeto: str, nombre_archivo: str) -> tuple[str, str]:
-    """Genera URLs privadas firmadas temporales (ver en navegador y descargar)."""
+    """Genera URLs privadas firmadas temporales desde Cloudflare R2 o Supabase Storage."""
+    if ruta_objeto.startswith(R2_PREFIX):
+        cliente = obtener_cliente_r2()
+        if cliente is None:
+            raise PortalError("Falta configurar [r2_storage] en los secretos de Streamlit.")
+        clave_r2 = ruta_objeto[len(R2_PREFIX):].lstrip("/")
+        try:
+            url_ver = cliente.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": R2_BUCKET,
+                    "Key": clave_r2,
+                    "ResponseContentDisposition": f'inline; filename="{nombre_archivo}"',
+                },
+                ExpiresIn=SIGNED_URL_TTL_SECONDS,
+            )
+            url_descargar = cliente.generate_presigned_url(
+                "get_object",
+                Params={
+                    "Bucket": R2_BUCKET,
+                    "Key": clave_r2,
+                    "ResponseContentDisposition": f'attachment; filename="{nombre_archivo}"',
+                },
+                ExpiresIn=SIGNED_URL_TTL_SECONDS,
+            )
+            return url_ver, url_descargar
+        except Exception as error:
+            raise PortalError(f"No se pudo generar el enlace en Cloudflare R2: {error}") from error
+
+    # Compatibilidad con archivos previamente subidos a Supabase Storage (sb://)
     if not STORAGE_URL or not STORAGE_KEY or not STORAGE_BUCKET:
         raise PortalError(
-            "Falta configurar [supabase_storage] (url, key y bucket) en los secretos de Streamlit."
+            "Falta configurar [supabase_storage] en los secretos de Streamlit."
         )
-    objeto_codificado = quote(ruta_objeto, safe="/")
+    clave_sb = ruta_objeto[len(STORAGE_PREFIX):].lstrip("/")
+    objeto_codificado = quote(clave_sb, safe="/")
     endpoint = f"{STORAGE_URL}/storage/v1/object/sign/{STORAGE_BUCKET}/{objeto_codificado}"
     headers = {
         "apikey": STORAGE_KEY,
@@ -346,7 +403,7 @@ def generar_enlaces_privados_storage(ruta_objeto: str, nombre_archivo: str) -> t
 
     if not response.ok:
         if response.status_code in (400, 404):
-            raise PortalError("El archivo no se encontró en el bucket de Supabase Storage.")
+            raise PortalError("El archivo no se encontró en Supabase Storage.")
         raise PortalError(f"Supabase Storage respondió con el código {response.status_code}.")
 
     data = response.json()
@@ -364,7 +421,6 @@ def generar_enlaces_privados_storage(ruta_objeto: str, nombre_archivo: str) -> t
     separador = "&" if "?" in url_ver else "?"
     url_descargar = f"{url_ver}{separador}download={quote(nombre_archivo)}"
     return url_ver, url_descargar
-
 
 def borrar_sesion():
     for key in (
