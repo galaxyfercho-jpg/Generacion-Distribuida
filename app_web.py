@@ -1,6 +1,8 @@
 import hashlib
+import os
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import pandas as pd
 import requests
@@ -242,6 +244,13 @@ except Exception:
     st.caption("Agrega la URL y la clave pública anon del proyecto en los secretos de Streamlit.")
     st.stop()
 
+_storage_cfg = st.secrets.get("supabase_storage", {})
+STORAGE_URL = str(_storage_cfg.get("url", SUPABASE_URL)).rstrip("/")
+STORAGE_KEY = str(_storage_cfg.get("key", SUPABASE_SERVICE_ROLE_KEY)).strip()
+STORAGE_BUCKET = str(_storage_cfg.get("bucket", "soportes-gd")).strip()
+STORAGE_PREFIX = "sb://"
+SIGNED_URL_TTL_SECONDS = 300
+
 
 class PortalError(RuntimeError):
     pass
@@ -292,6 +301,71 @@ def solicitar_supabase(method, endpoint, token=None, params=None, payload=None):
         raise PortalError("El servicio devolvió una respuesta no válida.") from error
 
 
+def extraer_ruta_objeto_storage(ruta_bd: str) -> str | None:
+    """Devuelve la ruta interna del objeto en el bucket si la referencia usa sb://."""
+    if not ruta_bd:
+        return None
+    texto = str(ruta_bd).strip()
+    if not texto.startswith(STORAGE_PREFIX):
+        return None
+    objeto = texto[len(STORAGE_PREFIX):].lstrip("/")
+    if objeto.startswith(f"{STORAGE_BUCKET}/"):
+        objeto = objeto[len(STORAGE_BUCKET) + 1:]
+    return objeto or None
+
+
+def obtener_nombre_archivo(ruta_bd: str) -> str:
+    texto = str(ruta_bd or "").strip()
+    if texto.startswith(STORAGE_PREFIX):
+        return texto.rstrip("/").split("/")[-1]
+    return os.path.basename(texto.replace("\\", "/")) or texto
+
+
+def generar_enlaces_privados_storage(ruta_objeto: str, nombre_archivo: str) -> tuple[str, str]:
+    """Genera URLs privadas firmadas temporales (ver en navegador y descargar)."""
+    if not STORAGE_URL or not STORAGE_KEY or not STORAGE_BUCKET:
+        raise PortalError(
+            "Falta configurar [supabase_storage] (url, key y bucket) en los secretos de Streamlit."
+        )
+    objeto_codificado = quote(ruta_objeto, safe="/")
+    endpoint = f"{STORAGE_URL}/storage/v1/object/sign/{STORAGE_BUCKET}/{objeto_codificado}"
+    headers = {
+        "apikey": STORAGE_KEY,
+        "Authorization": f"Bearer {STORAGE_KEY}",
+        "Content-Type": "application/json",
+    }
+    try:
+        response = requests.post(
+            endpoint,
+            headers=headers,
+            json={"expiresIn": SIGNED_URL_TTL_SECONDS},
+            timeout=(8, 25),
+        )
+    except requests.RequestException as error:
+        raise PortalError("No se pudo conectar con Supabase Storage.") from error
+
+    if not response.ok:
+        if response.status_code in (400, 404):
+            raise PortalError("El archivo no se encontró en el bucket de Supabase Storage.")
+        raise PortalError(f"Supabase Storage respondió con el código {response.status_code}.")
+
+    data = response.json()
+    signed_rel = data.get("signedURL") or data.get("signedUrl")
+    if not signed_rel:
+        raise PortalError("Supabase Storage no devolvió un enlace firmado válido.")
+
+    if signed_rel.startswith("http://") or signed_rel.startswith("https://"):
+        url_ver = signed_rel
+    elif signed_rel.startswith("/storage/v1/"):
+        url_ver = f"{STORAGE_URL}{signed_rel}"
+    else:
+        url_ver = f"{STORAGE_URL}/storage/v1{signed_rel}"
+
+    separador = "&" if "?" in url_ver else "?"
+    url_descargar = f"{url_ver}{separador}download={quote(nombre_archivo)}"
+    return url_ver, url_descargar
+
+
 def borrar_sesion():
     for key in (
         "access_token",
@@ -299,6 +373,7 @@ def borrar_sesion():
         "expires_at",
         "user_profile",
         "generated_web_user_credential",
+        "signed_doc_links",
     ):
         st.session_state.pop(key, None)
 
@@ -696,21 +771,200 @@ def mostrar_detalle(proyectos: pd.DataFrame, token: str):
         )
 
 
-def mostrar_repositorio_documental_pendiente():
-    st.caption("Repositorio global de soportes documentales")
+def mostrar_gestor_soportes(proyectos: pd.DataFrame, token: str):
+    st.caption(
+        "Repositorio global de soportes documentales · Acceso privado mediante enlaces temporales"
+    )
+    if proyectos.empty:
+        st.info("No hay proyectos disponibles para esta cuenta.")
+        return
+
+    try:
+        requisitos_docs = cargar_tabla(
+            "requisitos",
+            token,
+            "id,proyecto_id,categoria,descripcion,estado,evidencia_ruta,evidencia_respuesta",
+        )
+    except PortalError as error:
+        requisitos_docs = st.session_state.get("portal_cached_support_requirements")
+        if requisitos_docs is None:
+            st.error(str(error), title="No se pudieron cargar los soportes")
+            return
+        st.warning(
+            f"No se pudieron actualizar los soportes; se muestran los últimos datos cargados. {error}"
+        )
+    else:
+        st.session_state["portal_cached_support_requirements"] = requisitos_docs
+
+    if requisitos_docs.empty:
+        st.info("No hay requisitos registrados en la base de datos.")
+        return
+
+    proy_map = proyectos[["id", "cluster", "nombre"]].copy()
+    proy_map["cluster"] = proy_map["cluster"].fillna("").astype(str).str.strip()
+    proy_map.loc[
+        proy_map["cluster"].str.casefold().isin({"", "n/a", "individual"}),
+        "cluster",
+    ] = "Proyectos individuales"
+
+    combinado = requisitos_docs.merge(
+        proy_map,
+        left_on="proyecto_id",
+        right_on="id",
+        how="inner",
+        suffixes=("", "_proy"),
+    )
+
+    registros = []
+    for fila in combinado.itertuples():
+        for columna, tipo_ev in (
+            ("evidencia_ruta", "Radicado"),
+            ("evidencia_respuesta", "Cierre"),
+        ):
+            valor = getattr(fila, columna, None)
+            if not valor or pd.isna(valor):
+                continue
+            for ruta in [item.strip() for item in str(valor).split("|") if item.strip()]:
+                ruta_objeto = extraer_ruta_objeto_storage(ruta)
+                registros.append(
+                    {
+                        "req_id": int(fila.id),
+                        "cluster": fila.cluster,
+                        "proyecto": fila.nombre,
+                        "categoria": fila.categoria or "",
+                        "descripcion": fila.descripcion or "",
+                        "estado": fila.estado or "",
+                        "tipo_evidencia": tipo_ev,
+                        "nombre_archivo": obtener_nombre_archivo(ruta),
+                        "ruta_objeto": ruta_objeto,
+                        "en_nube": ruta_objeto is not None,
+                    }
+                )
+
+    if not registros:
+        st.info("Aún no hay soportes adjuntos registrados en el portafolio.")
+        return
+
+    df_docs = pd.DataFrame(registros)
+
     with st.container(border=True):
-        st.badge("En preparación", icon=":material/hourglass_top:", color="orange")
-        st.markdown("### Conexión privada a los documentos pendiente")
-        st.write(
-            "Los adjuntos actuales están vinculados a rutas locales del equipo de escritorio. "
-            "El portal no puede abrir esas rutas. La conexión con SharePoint todavía requiere "
-            "acceso aprobado por el administrador de Microsoft 365."
+        st.markdown("**Filtros de soportes**")
+        c1, c2, c3 = st.columns(3)
+        clusters = ["Todos"] + sorted(df_docs["cluster"].unique().tolist())
+        cluster_sel = c1.selectbox("Clúster", clusters, key="soporte_cluster_sel")
+
+        df_cluster = (
+            df_docs if cluster_sel == "Todos" else df_docs[df_docs["cluster"] == cluster_sel]
         )
-        st.info(
-            "No se han creado enlaces públicos ni se han subido documentos. "
-            "Cuando se habilite el acceso privado, aquí podrás filtrar los soportes por "
-            "clúster, proyecto y tipo de evidencia."
+        proyectos_disp = ["Todos"] + sorted(df_cluster["proyecto"].unique().tolist())
+        proyecto_sel = c2.selectbox("Proyecto", proyectos_disp, key="soporte_proyecto_sel")
+
+        tipo_sel = c3.selectbox(
+            "Tipo de evidencia",
+            ["Todos", "Solo radicados", "Solo cierres"],
+            key="soporte_tipo_sel",
         )
+        busqueda = st.text_input(
+            "Buscar por requisito, módulo o nombre de archivo",
+            type="search",
+            key="soporte_busqueda",
+        )
+
+    filtrados = df_cluster.copy()
+    if proyecto_sel != "Todos":
+        filtrados = filtrados[filtrados["proyecto"] == proyecto_sel]
+    if tipo_sel == "Solo radicados":
+        filtrados = filtrados[filtrados["tipo_evidencia"] == "Radicado"]
+    elif tipo_sel == "Solo cierres":
+        filtrados = filtrados[filtrados["tipo_evidencia"] == "Cierre"]
+    if busqueda.strip():
+        termino = busqueda.strip().casefold()
+        filtrados = filtrados[
+            filtrados["descripcion"].str.casefold().str.contains(termino, regex=False)
+            | filtrados["nombre_archivo"].str.casefold().str.contains(termino, regex=False)
+            | filtrados["categoria"].str.casefold().str.contains(termino, regex=False)
+        ]
+
+    total_docs = len(filtrados)
+    en_nube = int(filtrados["en_nube"].sum()) if total_docs else 0
+    pendientes_subir = total_docs - en_nube
+
+    with st.container(horizontal=True):
+        st.metric("Documentos encontrados", f"{total_docs:,}", border=True)
+        st.metric("Disponibles en la web", f"{en_nube:,}", border=True)
+        st.metric("Pendientes de subir desde PC", f"{pendientes_subir:,}", border=True)
+
+    if not STORAGE_KEY:
+        st.warning(
+            "Falta la clave de almacenamiento en los secretos de Streamlit ([supabase_storage])."
+        )
+
+    if filtrados.empty:
+        st.info("No hay documentos que coincidan con los filtros seleccionados.")
+        return
+
+    enlaces_cache = st.session_state.setdefault("signed_doc_links", {})
+    ahora = time.time()
+
+    for idx, doc in filtrados.reset_index(drop=True).iterrows():
+        with st.container(border=True):
+            col_info, col_acc = st.columns([3.2, 1.5], vertical_alignment="center")
+            with col_info:
+                if doc["tipo_evidencia"] == "Radicado":
+                    st.badge("Radicado", color="blue", icon=":material/upload_file:")
+                else:
+                    st.badge("Cierre", color="green", icon=":material/task_alt:")
+                st.markdown(f"**{doc['proyecto']}** · {doc['cluster']}")
+                st.markdown(f"{doc['descripcion']}  \n`{doc['nombre_archivo']}`")
+
+            with col_acc:
+                if doc["en_nube"]:
+                    llave_doc = f"{doc['req_id']}|{doc['tipo_evidencia']}|{doc['ruta_objeto']}"
+                    cache_item = enlaces_cache.get(llave_doc)
+                    enlace_vigente = cache_item and cache_item["expires_at"] > ahora + 15
+
+                    if not enlace_vigente:
+                        if st.button(
+                            "Preparar acceso",
+                            key=f"prep_doc_{idx}_{doc['req_id']}",
+                            type="primary",
+                            width="stretch",
+                            icon=":material/lock_open:",
+                        ):
+                            try:
+                                url_ver, url_desc = generar_enlaces_privados_storage(
+                                    doc["ruta_objeto"], doc["nombre_archivo"]
+                                )
+                            except PortalError as error:
+                                st.error(str(error))
+                            else:
+                                enlaces_cache[llave_doc] = {
+                                    "view": url_ver,
+                                    "download": url_desc,
+                                    "expires_at": ahora + SIGNED_URL_TTL_SECONDS,
+                                }
+                                st.rerun()
+                    else:
+                        st.link_button(
+                            "Ver documento",
+                            cache_item["view"],
+                            type="primary",
+                            width="stretch",
+                            icon=":material/visibility:",
+                        )
+                        st.link_button(
+                            "Descargar",
+                            cache_item["download"],
+                            width="stretch",
+                            icon=":material/download:",
+                        )
+                else:
+                    st.badge(
+                        "Solo en PC escritorio",
+                        color="orange",
+                        icon=":material/computer:",
+                    )
+                    st.caption("Pendiente de sincronizar a Supabase Storage.")
 
 
 def mostrar_administracion_usuarios(perfil: dict) -> None:
@@ -974,7 +1228,7 @@ def mostrar_portafolio_actualizado(pagina: str, perfil: dict) -> None:
     elif pagina == "Administración de usuarios":
         mostrar_administracion_usuarios(perfil)
     else:
-        mostrar_repositorio_documental_pendiente()
+        mostrar_gestor_soportes(proyectos, token_actual)
 
 
 if "access_token" not in st.session_state:
