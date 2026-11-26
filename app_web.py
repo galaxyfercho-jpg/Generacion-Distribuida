@@ -259,7 +259,7 @@ R2_SECRET_ACCESS_KEY = str(_r2_cfg.get("secret_access_key", "")).strip()
 R2_BUCKET = str(_r2_cfg.get("bucket", "soportes-gd")).strip()
 R2_PREFIX = "r2://"
 
-SIGNED_URL_TTL_SECONDS = 300
+SIGNED_URL_TTL_SECONDS = 86400
 
 
 @st.cache_resource
@@ -973,34 +973,28 @@ def mostrar_gestor_soportes(proyectos: pd.DataFrame, token: str):
                 st.markdown(f"**{doc['proyecto']}** · {doc['cluster']}")
                 st.markdown(f"{doc['descripcion']}  \n`{doc['nombre_archivo']}`")
 
-            with col_acc:
+           with col_acc:
                 if doc["en_nube"]:
                     llave_doc = f"{doc['req_id']}|{doc['tipo_evidencia']}|{doc['ruta_objeto']}"
                     cache_item = enlaces_cache.get(llave_doc)
-                    enlace_vigente = cache_item and cache_item["expires_at"] > ahora + 15
+                    enlace_vigente = cache_item and cache_item["expires_at"] > ahora + 60
 
                     if not enlace_vigente:
-                        if st.button(
-                            "Preparar acceso",
-                            key=f"prep_doc_{idx}_{doc['req_id']}",
-                            type="primary",
-                            width="stretch",
-                            icon=":material/lock_open:",
-                        ):
-                            try:
-                                url_ver, url_desc = generar_enlaces_privados_storage(
-                                    doc["ruta_objeto"], doc["nombre_archivo"]
-                                )
-                            except PortalError as error:
-                                st.error(str(error))
-                            else:
-                                enlaces_cache[llave_doc] = {
-                                    "view": url_ver,
-                                    "download": url_desc,
-                                    "expires_at": ahora + SIGNED_URL_TTL_SECONDS,
-                                }
-                                st.rerun()
-                    else:
+                        try:
+                            url_ver, url_desc = generar_enlaces_privados_storage(
+                                doc["ruta_objeto"], doc["nombre_archivo"]
+                            )
+                            cache_item = {
+                                "view": url_ver,
+                                "download": url_desc,
+                                "expires_at": ahora + SIGNED_URL_TTL_SECONDS,
+                            }
+                            enlaces_cache[llave_doc] = cache_item
+                        except PortalError as error:
+                            st.caption(f"Error enlace: {error}")
+                            cache_item = None
+
+                    if cache_item:
                         st.link_button(
                             "Ver documento",
                             cache_item["view"],
@@ -1020,7 +1014,7 @@ def mostrar_gestor_soportes(proyectos: pd.DataFrame, token: str):
                         color="orange",
                         icon=":material/computer:",
                     )
-                    st.caption("Pendiente de sincronizar a Supabase Storage.")
+                    st.caption("Pendiente de sincronizar a Cloudflare R2.")
 
 
 def mostrar_administracion_usuarios(perfil: dict) -> None:
