@@ -4,10 +4,10 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
-import pandas as pd
-import requests
 import boto3
 from botocore.config import Config
+import pandas as pd
+import requests
 import streamlit as st
 from web_dashboard import calcular_avance_por_cluster, crear_grafico_avance
 from requirement_rules import RADICACION_NO_APLICA_CATEGORIAS
@@ -259,7 +259,7 @@ R2_SECRET_ACCESS_KEY = str(_r2_cfg.get("secret_access_key", "")).strip()
 R2_BUCKET = str(_r2_cfg.get("bucket", "soportes-gd")).strip()
 R2_PREFIX = "r2://"
 
-SIGNED_URL_TTL_SECONDS = 86400
+SIGNED_URL_TTL_SECONDS = 7200
 
 
 @st.cache_resource
@@ -326,7 +326,6 @@ def solicitar_supabase(method, endpoint, token=None, params=None, payload=None):
 
 
 def extraer_ruta_objeto_storage(ruta_bd: str) -> str | None:
-    """Devuelve la referencia en nube si usa r2:// o sb://."""
     if not ruta_bd:
         return None
     texto = str(ruta_bd).strip()
@@ -349,7 +348,6 @@ def obtener_nombre_archivo(ruta_bd: str) -> str:
 
 
 def generar_enlaces_privados_storage(ruta_objeto: str, nombre_archivo: str) -> tuple[str, str]:
-    """Genera URLs privadas firmadas temporales desde Cloudflare R2 o Supabase Storage."""
     if ruta_objeto.startswith(R2_PREFIX):
         cliente = obtener_cliente_r2()
         if cliente is None:
@@ -378,7 +376,6 @@ def generar_enlaces_privados_storage(ruta_objeto: str, nombre_archivo: str) -> t
         except Exception as error:
             raise PortalError(f"No se pudo generar el enlace en Cloudflare R2: {error}") from error
 
-    # Compatibilidad con archivos previamente subidos a Supabase Storage (sb://)
     if not STORAGE_URL or not STORAGE_KEY or not STORAGE_BUCKET:
         raise PortalError(
             "Falta configurar [supabase_storage] en los secretos de Streamlit."
@@ -421,6 +418,7 @@ def generar_enlaces_privados_storage(ruta_objeto: str, nombre_archivo: str) -> t
     separador = "&" if "?" in url_ver else "?"
     url_descargar = f"{url_ver}{separador}download={quote(nombre_archivo)}"
     return url_ver, url_descargar
+
 
 def borrar_sesion():
     for key in (
@@ -950,10 +948,8 @@ def mostrar_gestor_soportes(proyectos: pd.DataFrame, token: str):
         st.metric("Disponibles en la web", f"{en_nube:,}", border=True)
         st.metric("Pendientes de subir desde PC", f"{pendientes_subir:,}", border=True)
 
-    if not STORAGE_KEY:
-        st.warning(
-            "Falta la clave de almacenamiento en los secretos de Streamlit ([supabase_storage])."
-        )
+    if not R2_ACCESS_KEY_ID:
+        st.warning("Falta configurar [r2_storage] en los secretos de Streamlit.")
 
     if filtrados.empty:
         st.info("No hay documentos que coincidan con los filtros seleccionados.")
@@ -973,7 +969,7 @@ def mostrar_gestor_soportes(proyectos: pd.DataFrame, token: str):
                 st.markdown(f"**{doc['proyecto']}** · {doc['cluster']}")
                 st.markdown(f"{doc['descripcion']}  \n`{doc['nombre_archivo']}`")
 
-           with col_acc:
+            with col_acc:
                 if doc["en_nube"]:
                     llave_doc = f"{doc['req_id']}|{doc['tipo_evidencia']}|{doc['ruta_objeto']}"
                     cache_item = enlaces_cache.get(llave_doc)
